@@ -30,7 +30,8 @@ node "$PSScriptRoot\extract-asar.js" "$ResourcesDir\app.asar" "$ProjectRoot\app_
 Write-Host "[2/8] Merging unpacked files..." -ForegroundColor Yellow
 $unpacked = "$ResourcesDir\app.asar.unpacked"
 if (Test-Path $unpacked) {
-  Copy-Item "$unpacked\*" "$ProjectRoot\app_content" -Recurse -Force
+  # Use robocopy for robust directory merge (handles file/dir conflicts)
+  robocopy "$unpacked" "$ProjectRoot\app_content" /E /NJH /NJS /NDL /NP 2>&1 | Out-Null
 }
 
 # ---- Step 3: Set up project structure ----

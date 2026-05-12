@@ -5,23 +5,30 @@ const srcAsar = path.resolve(process.argv[2]);
 const destDir = path.resolve(process.argv[3]);
 
 // Read asar header
+// Format: 4 bytes UInt32LE = header JSON byte length, then JSON, then file data
 const fd = fs.openSync(srcAsar, 'r');
-const headerBuf = Buffer.alloc(8);
-fs.readSync(fd, headerBuf, 0, 8, 0);
-const headerSize = Number(headerBuf.readBigUInt64LE(0));
+const headerSizeBuf = Buffer.alloc(4);
+fs.readSync(fd, headerSizeBuf, 0, 4, 0);
+const headerSize = headerSizeBuf.readUInt32LE(0);
 const headerJson = Buffer.alloc(headerSize);
-fs.readSync(fd, headerJson, 0, headerSize, 8);
+fs.readSync(fd, headerJson, 0, headerSize, 4);
 const header = JSON.parse(headerJson.toString('utf8'));
 
 const unpackedBase = srcAsar.replace(/\.asar$/i, '.asar.unpacked');
 let skipped = 0;
 let extracted = 0;
 
+const dataOffset = 4 + headerSize;
+
 function walk(files, parentPath, entry) {
   if (entry.files) {
     for (const [name, info] of Object.entries(entry.files)) {
       walk(files, parentPath ? parentPath + '/' + name : name, info);
     }
+  } else if (entry.unpacked) {
+    files.push({ path: parentPath, unpacked: true });
+  } else if (typeof entry.offset === 'number' && typeof entry.size === 'number') {
+    files.push({ path: parentPath, offset: entry.offset, size: entry.size });
   } else {
     files.push({ path: parentPath, offset: entry.offset, size: entry.size, unpacked: entry.unpacked });
   }
@@ -35,7 +42,6 @@ for (const f of fileList) {
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
 
   if (f.unpacked) {
-    // Unpacked file: try to copy from app.asar.unpacked directory
     const srcPath = path.join(unpackedBase, f.path);
     try {
       fs.copyFileSync(srcPath, outPath);
@@ -44,9 +50,8 @@ for (const f of fileList) {
       skipped++;
     }
   } else {
-    // Regular file: extract from asar
     const buf = Buffer.alloc(f.size);
-    fs.readSync(fd, buf, 0, f.size, 8 + headerSize + f.offset);
+    fs.readSync(fd, buf, 0, f.size, dataOffset + f.offset);
     fs.writeFileSync(outPath, buf);
     extracted++;
   }

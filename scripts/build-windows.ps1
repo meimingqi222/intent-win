@@ -151,7 +151,6 @@ $buildConfig = @{
   win = @{
     target = @(@{ target = "nsis"; arch = @("x64") })
     icon = "resources\icon.ico"
-    artifactName = "Intent-Setup-$Version-win-x64.${ext}"
     sign = $false
     signAndEditExecutable = $false
     verifyUpdateCodeSignature = $false

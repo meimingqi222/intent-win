@@ -118,7 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: build-output/installer/Intent-Setup-*.exe
+          path: build-output/installer/Intent*Setup*.exe
           retention-days: 30
 
       - name: Upload unpacked app (for debugging)
@@ -177,7 +177,7 @@ jobs:
             - This is a community-built Windows port of the official macOS Intent app
             - Auto-update points to this GitHub Release
             - Source: ${{ env.DMG_URL }}
-          files: dist/Intent-Setup-*.exe
+          files: dist/Intent*Setup*.exe
           draft: true
           prerelease: false
           generate_release_notes: false

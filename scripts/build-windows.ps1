@@ -141,7 +141,83 @@ $pkg | ConvertTo-Json -Depth 10 | Set-Content $pkgPath -Encoding UTF8
 # ---- Step 6: Apply patches ----
 Write-Host "[6/8] Applying compatibility patches..." -ForegroundColor Yellow
 
-# Patch 1: ssh-config import (CommonJS compat)
+# Patch 1: Windows shell quoting for external ACP providers (codex, claude-code, etc.)
+# On Windows, shell:true causes cmd.exe to mangle -c key=toml_value args containing
+# nested quotes (e.g., -c mcp_servers.x.args=["a","b"]). Use shell:false for .exe
+# commands to avoid this; .cmd/.bat files still use shell:true for execution.
+$acpProvider = "$ProjectRoot\dist\features\agent\main\agent-providers\acp-provider.js"
+if (Test-Path $acpProvider) {
+  $content = Get-Content $acpProvider -Raw
+  $oldStr = @'
+        // On Windows with shell: true, quote the command path to handle spaces
+        // (e.g. "C:\Program Files\nodejs\npx.cmd"). Without quotes, cmd.exe splits
+        // the path at the space and fails to find the executable.
+        if (process.platform === 'win32') {
+            spawnCommand = `"${spawnCommand}"`;
+        }
+        // Spawn the agent process using safe spawn with fallback options
+        const spawnOptions = {
+            cwd: workingDirectory,
+            env: {
+                ...process.env,
+                ...configEnv,
+                // Force unbuffered output
+                NODE_NO_READLINE: '1',
+                PYTHONUNBUFFERED: '1',
+                // Isolate npm cache per agent to prevent cross-provider ENOTEMPTY errors
+                ...(agentNpmCachePath ? { NPM_CONFIG_CACHE: agentNpmCachePath } : {}),
+            },
+            // stdio will be set by safeSpawn
+            detached: false,
+            shell: process.platform === 'win32',
+            windowsHide: true,
+        };
+'@
+  $newStr = @'
+        // On Windows with shell: true, quote the command path to handle spaces
+        // (e.g. "C:\Program Files\nodejs\npx.cmd"). Without quotes, cmd.exe splits
+        // the path at the space and fails to find the executable.
+        // 
+        // External providers (codex, claude-code, opencode, cortex) pass -c key=value
+        // or --model args that may contain nested quotes (TOML arrays, quoted strings).
+        // With shell:true, cmd.exe strips/realigns these quotes, splitting arguments.
+        // Use shell:false for .exe commands to avoid this (CreateProcess handles
+        // absolute paths with spaces correctly via lpApplicationName).
+        const needsShellSpawn = process.platform === 'win32' && (
+            caps.id === 'auggie' ||
+            /\.(cmd|bat)$/i.test(spawnCommand)
+        );
+        if (process.platform === 'win32' && needsShellSpawn) {
+            spawnCommand = `"${spawnCommand}"`;
+        }
+        // Spawn the agent process using safe spawn with fallback options
+        const spawnOptions = {
+            cwd: workingDirectory,
+            env: {
+                ...process.env,
+                ...configEnv,
+                // Force unbuffered output
+                NODE_NO_READLINE: '1',
+                PYTHONUNBUFFERED: '1',
+                // Isolate npm cache per agent to prevent cross-provider ENOTEMPTY errors
+                ...(agentNpmCachePath ? { NPM_CONFIG_CACHE: agentNpmCachePath } : {}),
+            },
+            // stdio will be set by safeSpawn
+            detached: false,
+            shell: needsShellSpawn,
+            windowsHide: true,
+        };
+'@
+  if ($content.Contains($oldStr)) {
+    $content = $content.Replace($oldStr, $newStr)
+    Set-Content $acpProvider -Value $content -NoNewline
+    Write-Host "  ✓ acp-provider shell=true patched for Windows"
+  } else {
+    Write-Host "  - acp-provider already patched, skipping"
+  }
+}
+
+# Patch 2: ssh-config import (CommonJS compat)
 $sshIpc = "$ProjectRoot\dist\features\ssh\main\ssh.ipc.js"
 if (Test-Path $sshIpc) {
   $content = Get-Content $sshIpc -Raw
@@ -154,7 +230,7 @@ if (Test-Path $sshIpc) {
   }
 }
 
-# Patch 2: Protocol handler renderer path
+# Patch 3: Protocol handler renderer path
 $protoHandler = "$ProjectRoot\dist\main\protocol-handlers.js"
 if (Test-Path $protoHandler) {
   $content = Get-Content $protoHandler -Raw
@@ -180,7 +256,7 @@ else {
   }
 }
 
-# Patch 3: Replace app-update.yml to point to GitHub Releases
+# Patch 4: Replace app-update.yml to point to GitHub Releases
 $updateYml = "$ProjectRoot\app-update.yml"
 if (Test-Path $updateYml) {
   @"

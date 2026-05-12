@@ -8,7 +8,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ScriptDir = Split-Path $PSCommandPath -Parent
 $ProjectRoot = Join-Path $OutputDir "app"
+# Resolve to absolute path (important: script changes directory during npm install)
+$ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 
 Write-Host "=== Intent Windows Builder ===" -ForegroundColor Cyan
 Write-Host "Resources: $ResourcesDir"

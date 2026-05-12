@@ -289,11 +289,11 @@ if (-not $SkipInstall) {
   }
   Write-Host "  ✓ native modules rebuilt"
 
-  $BuildRoot = (Resolve-Path "$ProjectRoot\..").Path
+  $BuildRoot = Split-Path $ProjectRoot -Parent
   Write-Host "  ✓ dependencies installed"
 } else {
   Write-Host "[7/8] Skipping dependency install (--SkipInstall)" -ForegroundColor Yellow
-  $BuildRoot = (Resolve-Path "$ProjectRoot\..").Path
+  $BuildRoot = Split-Path $ProjectRoot -Parent
 }
 
 # ---- Step 8: Build Windows installer ----

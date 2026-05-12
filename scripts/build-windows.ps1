@@ -75,19 +75,6 @@ if (Test-Path $unpackedRes) {
   Copy-Item "$unpackedRes\*" $resDir -Recurse -Force
 }
 
-# Icon — generate 256x256 PNG from iOS icon in renderer
-$iconPng = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
-$iconOut = "$resDir\icon.png"
-if (Test-Path $iconPng) {
-  # Use sharp to upscale to 256x256 (sharp installed as npm dep)
-  Push-Location $ProjectRoot
-  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "dist\renderer\icons\Icon-iOS-Default-68x68@2x.png" "resources\icon.png" 2>&1 | Out-Null
-  Pop-Location
-  Write-Host "  ✓ icon.png generated (256x256)"
-} else {
-  Write-Host "  ! no icon source found" -ForegroundColor Yellow
-}
-
 # ---- Step 5: Write package.json ----
 Write-Host "[5/8] Writing package.json..." -ForegroundColor Yellow
 $pkgPath = "$ProjectRoot\package.json"
@@ -234,6 +221,22 @@ if (-not $SkipInstall) {
 } else {
   Write-Host "[7/8] Skipping dependency install (--SkipInstall)" -ForegroundColor Yellow
   $BuildRoot = Split-Path $ProjectRoot -Parent
+}
+
+# ---- Step 7.5: Generate icon (sharp is now available) ----
+$iconPng = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
+$iconOut = "$ProjectRoot\resources\icon.png"
+if (Test-Path $iconPng) {
+  Push-Location $ProjectRoot
+  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "dist\renderer\icons\Icon-iOS-Default-68x68@2x.png" "resources\icon.png" 2>&1
+  Pop-Location
+  if (Test-Path $iconOut) {
+    Write-Host "  ✓ icon.png generated (256x256, $(Get-Item $iconOut).Length bytes)"
+  } else {
+    Write-Host "  ! icon generation failed, using default" -ForegroundColor Yellow
+  }
+} else {
+  Write-Host "  ! no icon source found at $iconPng" -ForegroundColor Yellow
 }
 
 # ---- Step 8: Build Windows installer ----

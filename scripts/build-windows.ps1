@@ -96,7 +96,7 @@ $buildConfig = @{
     target = @(@{ target = "nsis"; arch = @("x64") })
     icon = "resources\icon.ico"
     sign = $false
-    signAndEditExecutable = $false
+    signAndEditExecutable = $true
     verifyUpdateCodeSignature = $false
   }
   nsis = @{
@@ -104,6 +104,8 @@ $buildConfig = @{
     perMachine = $false
     allowToChangeInstallationDirectory = $true
     deleteAppDataOnUninstall = $false
+    installerIcon = "resources\icon.ico"
+    uninstallerIcon = "resources\icon.ico"
   }
   asar = $true
   asarUnpack = @(
@@ -235,16 +237,36 @@ if (Test-Path $iconRepo) {
   $icoSize = (Get-Item $iconDest).Length
   Write-Host "  ✓ icon.ico copied ($icoSize bytes)"
 } else {
-  Write-Host "  ! pre-built icon.ico not found at $iconRepo" -ForegroundColor Yellow
+  throw "pre-built icon.ico not found at $iconRepo"
+}
+
+if (-not (Test-Path $iconDest) -or (Get-Item $iconDest).Length -le 0) {
+  throw "Windows icon is missing or empty at $iconDest"
 }
 
 # ---- Step 8: Build Windows installer ----
 Write-Host "[8/8] Building Windows installer..." -ForegroundColor Yellow
-Push-Location $ProjectRoot
-npm run build:win 2>&1
-Pop-Location
-
 $InstallerDir = Join-Path $BuildRoot "installer"
+Push-Location $ProjectRoot
+try {
+  npm run build:win 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "electron-builder failed with exit code $LASTEXITCODE"
+  }
+} finally {
+  Pop-Location
+}
+
+$MainExe = Join-Path $InstallerDir "win-unpacked\Intent.exe"
+if (-not (Test-Path $MainExe)) {
+  throw "Built main executable was not found at $MainExe"
+}
+
+$versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($MainExe)
+if ($versionInfo.ProductName -eq "Electron" -or $versionInfo.OriginalFilename -eq "electron.exe") {
+  throw "Intent.exe still has Electron default executable resources; icon/resource editing did not run"
+}
+
 Write-Host ""
 Write-Host "=== Build complete! ===" -ForegroundColor Green
 Write-Host "Installer: $(Join-Path $InstallerDir "Intent-Setup-$Version-win-x64.exe")"

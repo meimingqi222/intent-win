@@ -1,0 +1,7 @@
+{
+  "name": "intent-win-builder",
+  "private": true,
+  "dependencies": {
+    "@electron/asar": "^3.4.0"
+  }
+}

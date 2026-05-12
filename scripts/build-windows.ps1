@@ -23,7 +23,14 @@ if (Test-Path $ProjectRoot) {
 }
 mkdir $ProjectRoot -Force | Out-Null
 
-# Use Node.js script for robust extraction (handles missing unpacked dotfiles gracefully)
+# Ensure @electron/asar is available for the extraction script
+$asarPkg = Join-Path $PSScriptRoot "..\node_modules\@electron\asar"
+if (-not (Test-Path $asarPkg)) {
+  Push-Location (Join-Path $PSScriptRoot "..")
+  npm install --ignore-scripts 2>&1 | Out-Null
+  Pop-Location
+}
+
 node "$PSScriptRoot\extract-asar.js" "$ResourcesDir\app.asar" "$ProjectRoot\app_content"
 
 # ---- Step 2: Merge unpacked files ----

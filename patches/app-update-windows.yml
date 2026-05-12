@@ -1,5 +1,0 @@
-# Windows auto-update configuration
-# Points to GitHub Releases so the built Windows app can self-update
-provider: generic
-url: https://github.com/${{ github.repository }}/releases/latest/download
-updaterCacheDirName: intent-updater

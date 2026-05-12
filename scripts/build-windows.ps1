@@ -75,63 +75,17 @@ if (Test-Path $unpackedRes) {
   Copy-Item "$unpackedRes\*" $resDir -Recurse -Force
 }
 
-# Icon — prefer pre-generated .ico (from patches), fallback to .icns → convert
-if (-not [string]::IsNullOrEmpty($PatchesDir) -and (Test-Path "$PatchesDir\icon.ico")) {
-  Copy-Item "$PatchesDir\icon.ico" $resDir -Force
-  Write-Host "  ✓ icon.ico from patches"
-}
-elseif (Test-Path "$ResourcesDir\icon.ico") {
-  Copy-Item "$ResourcesDir\icon.ico" $resDir -Force
-  Write-Host "  ✓ icon.ico from resources"
-}
-else {
-  # Generate .ico from the iOS PNG (upscale to 256x256)
-  $iconPng = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
-  if (Test-Path $iconPng) {
-    try {
-      $sharp = npm pack @img/sharp-win32-x64 2>&1 | Out-Null
-      # Use built-in Node.js to create minimal ICO (PNG-based)
-      $pngBuf = [System.IO.File]::ReadAllBytes($iconPng)
-      # Pad/scale via simple nearest-neighbor (we just need a valid .ico)
-      Add-Type -AssemblyName System.Drawing
-      $img = [System.Drawing.Image]::FromStream([System.IO.MemoryStream]::new($pngBuf))
-      $bmp = New-Object System.Drawing.Bitmap(256, 256)
-      $g = [System.Drawing.Graphics]::FromImage($bmp)
-      $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-      $g.DrawImage($img, 0, 0, 256, 256)
-      $g.Dispose()
-      $ms = [System.IO.MemoryStream]::new()
-      $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-      $png256 = $ms.ToArray()
-      $bmp.Dispose()
-      $img.Dispose()
-      # Write ICO header + PNG as first (and only) entry
-      $fs = [System.IO.File]::Open("$resDir\icon.ico", [System.IO.FileMode]::Create)
-      $writer = [System.IO.BinaryWriter]::new($fs)
-      $writer.Write([UInt16]0)     # reserved
-      $writer.Write([UInt16]1)     # ICO type
-      $writer.Write([UInt16]1)     # 1 image
-      $writer.Write([byte]0)       # width (0=256)
-      $writer.Write([byte]0)       # height (0=256)
-      $writer.Write([byte]0)       # colors
-      $writer.Write([byte]0)       # reserved
-      $writer.Write([UInt16]1)     # color planes
-      $writer.Write([UInt16]32)    # bits per pixel
-      $writer.Write([UInt32]$png256.Length)  # size
-      $writer.Write([UInt32]22)    # offset (6+16)
-      $writer.Write($png256)
-      $writer.Dispose()
-      $fs.Dispose()
-      Write-Host "  ✓ icon.ico generated (256x256)"
-    }
-    catch {
-      Write-Host "  ! icon generation failed: $_" -ForegroundColor Yellow
-      # Copy .icns as fallback
-      if (Test-Path "$ResourcesDir\icon.icns") {
-        Copy-Item "$ResourcesDir\icon.icns" $resDir -Force
-      }
-    }
-  }
+# Icon — generate 256x256 PNG from iOS icon in renderer
+$iconPng = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
+$iconOut = "$resDir\icon.png"
+if (Test-Path $iconPng) {
+  # Use sharp to upscale to 256x256 (sharp installed as npm dep)
+  Push-Location $ProjectRoot
+  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "dist\renderer\icons\Icon-iOS-Default-68x68@2x.png" "resources\icon.png" 2>&1 | Out-Null
+  Pop-Location
+  Write-Host "  ✓ icon.png generated (256x256)"
+} else {
+  Write-Host "  ! no icon source found" -ForegroundColor Yellow
 }
 
 # ---- Step 5: Write package.json ----
@@ -150,7 +104,7 @@ $buildConfig = @{
   files = @("dist/**/*", "resources/**/*", "package.json")
   win = @{
     target = @(@{ target = "nsis"; arch = @("x64") })
-    icon = "resources\icon.ico"
+    icon = "resources\icon.png"
     sign = $false
     signAndEditExecutable = $false
     verifyUpdateCodeSignature = $false

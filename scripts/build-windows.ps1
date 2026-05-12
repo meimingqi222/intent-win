@@ -149,32 +149,7 @@ Write-Host "[6/8] Applying compatibility patches..." -ForegroundColor Yellow
 $acpProvider = "$ProjectRoot\dist\features\agent\main\agent-providers\acp-provider.js"
 if (Test-Path $acpProvider) {
   $content = Get-Content $acpProvider -Raw
-  $oldStr = @'
-        // On Windows with shell: true, quote the command path to handle spaces
-        // (e.g. "C:\Program Files\nodejs\npx.cmd"). Without quotes, cmd.exe splits
-        // the path at the space and fails to find the executable.
-        if (process.platform === 'win32') {
-            spawnCommand = `"${spawnCommand}"`;
-        }
-        // Spawn the agent process using safe spawn with fallback options
-        const spawnOptions = {
-            cwd: workingDirectory,
-            env: {
-                ...process.env,
-                ...configEnv,
-                // Force unbuffered output
-                NODE_NO_READLINE: '1',
-                PYTHONUNBUFFERED: '1',
-                // Isolate npm cache per agent to prevent cross-provider ENOTEMPTY errors
-                ...(agentNpmCachePath ? { NPM_CONFIG_CACHE: agentNpmCachePath } : {}),
-            },
-            // stdio will be set by safeSpawn
-            detached: false,
-            shell: process.platform === 'win32',
-            windowsHide: true,
-        };
-'@
-  $newStr = @'
+  $shimPatch = @'
         // External providers (codex, claude-code, opencode, cortex) pass -c key=value
         // or --model args that may contain nested quotes (TOML arrays, quoted strings).
         // On Windows, shell:true routes through cmd.exe, which strips/realigns those
@@ -248,6 +223,9 @@ if (Test-Path $acpProvider) {
             }
             return null;
         };
+        if (process.platform === 'win32' && typeof spawnCommand === 'string') {
+            spawnCommand = spawnCommand.replace(/^"(.*)"$/, '$1');
+        }
         const shimResolution = resolveWindowsNpmShim(spawnCommand);
         if (shimResolution) {
             logger.info('Resolved Windows npm shim for shellless spawn', {
@@ -267,32 +245,42 @@ if (Test-Path $acpProvider) {
         if (process.platform === 'win32' && needsShellSpawn) {
             spawnCommand = `"${spawnCommand}"`;
         }
-        // Spawn the agent process using safe spawn with fallback options
-        const spawnOptions = {
-            cwd: workingDirectory,
-            env: {
-                ...process.env,
-                ...configEnv,
-                // Force unbuffered output
-                NODE_NO_READLINE: '1',
-                PYTHONUNBUFFERED: '1',
-                // Isolate npm cache per agent to prevent cross-provider ENOTEMPTY errors
-                ...(agentNpmCachePath ? { NPM_CONFIG_CACHE: agentNpmCachePath } : {}),
-            },
-            // stdio will be set by safeSpawn
-            detached: false,
-            shell: needsShellSpawn,
-            windowsHide: true,
-        };
 '@
-  if ($content.Contains($oldStr)) {
-    $content = $content.Replace($oldStr, $newStr)
-    Set-Content $acpProvider -Value $content -NoNewline
-    Write-Host "  ✓ acp-provider shell=true patched for Windows"
-  } elseif ($content.Contains("resolveWindowsNpmShim")) {
+  if ($content.Contains("resolveWindowsNpmShim")) {
     Write-Host "  - acp-provider already patched, skipping"
   } else {
-    throw "acp-provider patch target not found; upstream spawn block changed"
+    $spawnCommandAnchor = "        let spawnCommand = this.config.command;"
+    $spawnOptionsAnchor = "        const spawnOptions = {"
+    $spawnCommandIndex = $content.IndexOf($spawnCommandAnchor)
+    if ($spawnCommandIndex -lt 0) {
+      throw "acp-provider patch target not found; spawnCommand anchor changed"
+    }
+    $spawnOptionsIndex = $content.IndexOf($spawnOptionsAnchor, $spawnCommandIndex)
+    if ($spawnOptionsIndex -lt 0) {
+      throw "acp-provider patch target not found; spawnOptions anchor changed"
+    }
+
+    $beforeSpawnOptions = $content.Substring(0, $spawnOptionsIndex)
+    $afterSpawnOptions = $content.Substring($spawnOptionsIndex)
+
+    # Remove the old Windows shell:true quoting block if present. This block has
+    # changed slightly across Intent releases, so keep the match intentionally local:
+    # only strip comments plus the immediate process.platform === 'win32' quote guard
+    # between spawnCommand and spawnOptions.
+    $quoteBlockPattern = '(?ms)        // On Windows with shell: true, quote the command path.*?        if \(process\.platform === ''win32''\) \{\s*            spawnCommand = `"\$\{spawnCommand\}`";\s*        \}\s*'
+    $beforeSpawnOptions = [regex]::Replace($beforeSpawnOptions, $quoteBlockPattern, '')
+
+    $content = $beforeSpawnOptions + $shimPatch + "`r`n" + $afterSpawnOptions
+
+    $shellPattern = '(?m)^(\s*)shell:\s*process\.platform === ''win32'','
+    if ($content -notmatch $shellPattern) {
+      throw "acp-provider patch target not found; spawnOptions shell field changed"
+    }
+    $shellRegex = [regex]$shellPattern
+    $content = $shellRegex.Replace($content, '$1shell: needsShellSpawn,', 1)
+
+    Set-Content $acpProvider -Value $content -NoNewline
+    Write-Host "  ✓ acp-provider shell=true patched for Windows"
   }
 }
 

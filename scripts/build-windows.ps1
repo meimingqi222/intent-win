@@ -198,9 +198,6 @@ if (-not $SkipInstall) {
   # Install electron and electron-builder
   npm install --save-dev electron@34.0.0 electron-builder@25.1.8 2>&1 | Out-Null
 
-  # Install png-to-ico for generating Windows .ico from PNG
-  npm install --save-dev png-to-ico@3.0.1 2>&1 | Out-Null
-
   # Install Windows-specific native packages
   npm install @img/sharp-win32-x64 @parcel/watcher-win32-x64 2>&1 | Out-Null
 
@@ -229,28 +226,16 @@ if (-not $SkipInstall) {
   $BuildRoot = Split-Path $ProjectRoot -Parent
 }
 
-# ---- Step 7.5: Generate Windows .ico icon ----
-$iconSource = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
-$iconPng = "$ProjectRoot\resources\icon.png"
-$iconIco = "$ProjectRoot\resources\icon.ico"
+# ---- Step 7.5: Copy pre-built Windows .ico icon ----
+$iconRepo = Join-Path (Split-Path $PSScriptRoot -Parent) "assets\icon.ico"
+$iconDest = "$ProjectRoot\resources\icon.ico"
 
-if (Test-Path $iconSource) {
-  Push-Location $ProjectRoot
-  # First generate a 256x256 PNG using sharp
-  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "$iconSource" "$iconPng" 2>&1 | Out-Null
-  
-  # Then convert PNG to multi-size ICO using png-to-ico
-  node -e "const {default: p}=require('png-to-ico');p(process.argv[1]).then(b=>require('fs').writeFileSync(process.argv[2],b))" "$iconPng" "$iconIco" 2>&1 | Out-Null
-  Pop-Location
-  
-  if (Test-Path $iconIco) {
-    $icoSize = (Get-Item $iconIco).Length
-    Write-Host "  ✓ icon.ico generated ($icoSize bytes)"
-  } else {
-    Write-Host "  ! icon.ico generation failed, falling back to png" -ForegroundColor Yellow
-  }
+if (Test-Path $iconRepo) {
+  Copy-Item $iconRepo $iconDest -Force
+  $icoSize = (Get-Item $iconDest).Length
+  Write-Host "  ✓ icon.ico copied ($icoSize bytes)"
 } else {
-  Write-Host "  ! no icon source found at $iconSource" -ForegroundColor Yellow
+  Write-Host "  ! pre-built icon.ico not found at $iconRepo" -ForegroundColor Yellow
 }
 
 # ---- Step 8: Build Windows installer ----

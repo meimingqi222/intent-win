@@ -1,0 +1,186 @@
+name: Build Windows Installer
+
+on:
+  schedule:
+    # Weekly: Monday 6AM UTC — check for new Intent releases
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      dmg_url:
+        description: >
+          URL to the macOS Intent.dmg.
+          Default: https://cdn.augmentcode.com/stable/Intent-latest-arm64.dmg
+        required: false
+        default: 'https://cdn.augmentcode.com/stable/Intent-latest-arm64.dmg'
+      version:
+        description: >
+          Version string (e.g. 0.3.10). 
+          If empty, auto-detected from DMG inside Info.plist
+        required: false
+        default: ''
+      skip_extract:
+        description: >
+          Set to 'true' when re-running the Windows build using a previously
+          uploaded macOS-resources artifact (skip macOS extraction).
+        required: false
+        default: 'false'
+
+env:
+  DMG_URL: ${{ inputs.dmg_url || 'https://cdn.augmentcode.com/stable/Intent-latest-arm64.dmg' }}
+  VERSION: ${{ inputs.version || '' }}
+
+jobs:
+  # ──────────────────────────────────────────────
+  #  JOB 1 — macOS: download & extract Resources
+  # ──────────────────────────────────────────────
+  extract-macos:
+    if: inputs.skip_extract != 'true'
+    runs-on: macos-14  # Apple Silicon runner
+    outputs:
+      version: ${{ steps.detect-version.outputs.version }}
+    steps:
+      - name: Checkout repo (for scripts)
+        uses: actions/checkout@v4
+
+      - name: Download Intent.dmg
+        run: |
+          echo "Downloading from ${{ env.DMG_URL }}"
+          curl -fsSL "${{ env.DMG_URL }}" -o /tmp/Intent.dmg
+          ls -lh /tmp/Intent.dmg
+
+      - name: Extract .app from DMG → Resources
+        run: |
+          chmod +x scripts/extract-macos.sh
+          ./scripts/extract-macos.sh /tmp/Intent.dmg /tmp/intent-resources
+          rm /tmp/Intent.dmg
+
+      - name: Detect version from Info.plist
+        id: detect-version
+        run: |
+          MOUNT=$(mktemp -d)
+          hdiutil attach /tmp/Intent.dmg -mountpoint "$MOUNT" -nobrowse -quiet 2>/dev/null || true
+          APP=$(find "$MOUNT" -maxdepth 2 -name "*.app" -type d | head -1)
+          VER=""
+          if [ -n "$APP" ] && [ -f "$APP/Contents/Info.plist" ]; then
+            VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
+          fi
+          hdiutil detach "$MOUNT" -quiet 2>/dev/null || true
+          echo "version=${VER:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: ${VER:-unknown}"
+
+      - name: Upload extracted Resources
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-resources
+          path: /tmp/intent-resources/
+          retention-days: 3
+
+  # ──────────────────────────────────────────────
+  #  JOB 2 — Windows: build installer
+  # ──────────────────────────────────────────────
+  build-windows:
+    needs: extract-macos
+    if: always() && !cancelled()
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo (for patches + scripts)
+        uses: actions/checkout@v4
+
+      - name: Download extracted macOS Resources
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-resources
+          path: macos-resources
+
+      - name: Show downloaded files
+        run: Get-ChildItem -Path macos-resources -Recurse -Depth 2 | Select-Object FullName, Length | Format-Table
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install global tools
+        run: |
+          npm install -g @electron/asar
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.extract-macos.outputs.version }}"
+          if ([string]::IsNullOrEmpty($version) -or $version -eq 'unknown') {
+            $version = "0.3.10"
+          }
+          .\scripts\build-windows.ps1 `
+            -ResourcesDir (Resolve-Path macos-resources) `
+            -OutputDir build-output `
+            -Version $version `
+            -PatchesDir (Resolve-Path patches)
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build-output/installer/Intent-Setup-*.exe
+          retention-days: 30
+
+      - name: Upload unpacked app (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-unpacked
+          path: build-output/installer/win-unpacked/
+          retention-days: 3
+
+  # ──────────────────────────────────────────────
+  #  JOB 3 — Publish Release
+  # ──────────────────────────────────────────────
+  publish:
+    needs: [extract-macos, build-windows]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: dist
+
+      - name: Download macOS resources (for update metadata)
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-resources
+          path: macos-resources
+
+      - name: Detect version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.extract-macos.outputs.version }}"
+          if ([string]::IsNullOrEmpty($ver) -or $ver -eq 'unknown') {
+            $ver = "0.$(Get-Date -Format 'yyyyMMdd')"
+          }
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          echo "Using version: $ver"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Intent for Windows v${{ steps.version.outputs.version }}
+          body: |
+            Automated Windows build from macOS Intent ${{ steps.version.outputs.version }}
+
+            ## What's included
+            - Windows x64 NSIS installer
+            - Compatible with Windows 10/11
+
+            ## Notes
+            - This is a community-built Windows port of the official macOS Intent app
+            - Auto-update points to this GitHub Release
+            - Source: ${{ env.DMG_URL }}
+          files: dist/Intent-Setup-*.exe
+          draft: true
+          prerelease: false
+          generate_release_notes: false

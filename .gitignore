@@ -1,0 +1,39 @@
+# ── Intent Windows Builder ──
+# Only commit: .github/  scripts/  patches/  .gitignore  README.md
+
+# Extracted macOS app (MASSIVE — do not commit)
+app.asar
+app.asar.unpacked/
+app_extracted/
+app_asar_extracted/
+Resources/
+Resources.zip
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+release/
+build-output/
+installer/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*

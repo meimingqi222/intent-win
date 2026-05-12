@@ -54,19 +54,12 @@ jobs:
           ./scripts/extract-macos.sh /tmp/Intent.dmg /tmp/intent-resources
           rm /tmp/Intent.dmg
 
-      - name: Detect version from Info.plist
+      - name: Detect version from extracted files
         id: detect-version
         run: |
-          MOUNT=$(mktemp -d)
-          hdiutil attach /tmp/Intent.dmg -mountpoint "$MOUNT" -nobrowse -quiet 2>/dev/null || true
-          APP=$(find "$MOUNT" -maxdepth 2 -name "*.app" -type d | head -1)
-          VER=""
-          if [ -n "$APP" ] && [ -f "$APP/Contents/Info.plist" ]; then
-            VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "")
-          fi
-          hdiutil detach "$MOUNT" -quiet 2>/dev/null || true
-          echo "version=${VER:-unknown}" >> "$GITHUB_OUTPUT"
-          echo "Detected version: ${VER:-unknown}"
+          VER=$(cat /tmp/intent-resources/version.txt 2>/dev/null || echo "unknown")
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: ${VER}"
 
       - name: Upload extracted Resources
         uses: actions/upload-artifact@v4

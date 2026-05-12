@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Extract macOS Intent.app → app.asar + app.asar.unpacked
+# Extract macOS Intent.app → Resources + version
 # Usage: extract-macos.sh <path-to-Intent.dmg> <output-dir>
 
 DMG="$1"
@@ -25,6 +25,14 @@ mkdir -p "$OUTDIR"
 cp "$RESOURCES/app.asar" "$OUTDIR/"
 cp "$RESOURCES/app-update.yml" "$OUTDIR/" 2>/dev/null || true
 cp "$RESOURCES/icon.icns" "$OUTDIR/" 2>/dev/null || true
+
+# Detect version from Info.plist (while DMG is still mounted)
+VER="unknown"
+if [ -f "$APP/Contents/Info.plist" ]; then
+  VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "unknown")
+fi
+echo "$VER" > "$OUTDIR/version.txt"
+echo "Detected version: $VER"
 
 # Unpacked directory (native modules + renderer + resources)
 # Use tar to preserve all files including dotfiles

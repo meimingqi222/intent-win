@@ -143,8 +143,9 @@ Write-Host "[6/8] Applying compatibility patches..." -ForegroundColor Yellow
 
 # Patch 1: Windows shell quoting for external ACP providers (codex, claude-code, etc.)
 # On Windows, shell:true causes cmd.exe to mangle -c key=toml_value args containing
-# nested quotes (e.g., -c mcp_servers.x.args=["a","b"]). Use shell:false for .exe
-# commands to avoid this; .cmd/.bat files still use shell:true for execution.
+# nested quotes (e.g., -c mcp_servers.x.args=["a","b"]). Use shell:false where possible.
+# npm shims (codex.cmd, npx.cmd, etc.) are expanded to `node.exe <bin.js>` so they
+# also avoid cmd.exe while remaining runnable from Electron/Node.
 $acpProvider = "$ProjectRoot\dist\features\agent\main\agent-providers\acp-provider.js"
 if (Test-Path $acpProvider) {
   $content = Get-Content $acpProvider -Raw
@@ -174,18 +175,94 @@ if (Test-Path $acpProvider) {
         };
 '@
   $newStr = @'
-        // On Windows with shell: true, quote the command path to handle spaces
-        // (e.g. "C:\Program Files\nodejs\npx.cmd"). Without quotes, cmd.exe splits
-        // the path at the space and fails to find the executable.
-        // 
         // External providers (codex, claude-code, opencode, cortex) pass -c key=value
         // or --model args that may contain nested quotes (TOML arrays, quoted strings).
-        // With shell:true, cmd.exe strips/realigns these quotes, splitting arguments.
-        // Use shell:false for .exe commands to avoid this (CreateProcess handles
-        // absolute paths with spaces correctly via lpApplicationName).
+        // On Windows, shell:true routes through cmd.exe, which strips/realigns those
+        // quotes. Prefer shell:false. npm .cmd shims are not directly runnable with
+        // shell:false, so expand them to `node.exe <shim-target.js> ...args`.
+        const resolveWindowsNpmShim = (command) => {
+            if (process.platform !== 'win32' || !command || caps.id === 'auggie') {
+                return null;
+            }
+            const unquotedCommand = command.replace(/^"(.*)"$/, '$1');
+            const commandHasPath = /[\\/]/.test(unquotedCommand);
+            const commandExt = path.extname(unquotedCommand).toLowerCase();
+            const candidates = [];
+            const addCandidate = (candidate) => {
+                if (candidate && !candidates.includes(candidate)) {
+                    candidates.push(candidate);
+                }
+            };
+            if (commandHasPath) {
+                addCandidate(unquotedCommand);
+                if (!commandExt) {
+                    addCandidate(`${unquotedCommand}.cmd`);
+                }
+            }
+            else {
+                const pathEntries = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+                for (const pathEntry of pathEntries) {
+                    if (commandExt) {
+                        addCandidate(path.join(pathEntry, unquotedCommand));
+                    }
+                    else {
+                        addCandidate(path.join(pathEntry, `${unquotedCommand}.cmd`));
+                        addCandidate(path.join(pathEntry, unquotedCommand));
+                    }
+                }
+            }
+            for (const candidate of candidates) {
+                if (!fs.existsSync(candidate) || fs.statSync(candidate).isDirectory()) {
+                    continue;
+                }
+                const candidateExt = path.extname(candidate).toLowerCase();
+                const shimDir = path.dirname(candidate);
+                let shimText = '';
+                try {
+                    shimText = fs.readFileSync(candidate, 'utf8');
+                }
+                catch {
+                    continue;
+                }
+                let jsTarget = null;
+                if (candidateExt === '.cmd' || candidateExt === '.bat') {
+                    const match = shimText.match(/"((?:%dp0%|%~dp0%)[^"]+?\.js)"\s+%\*/i);
+                    if (match) {
+                        jsTarget = match[1]
+                            .replace(/%~?dp0%\\?/ig, `${shimDir}\\`)
+                            .replace(/\\/g, path.sep);
+                    }
+                }
+                else if (!candidateExt) {
+                    const match = shimText.match(/"\$basedir\/([^"]+?\.js)"\s+"\$@"/);
+                    if (match) {
+                        jsTarget = path.join(shimDir, ...match[1].split('/'));
+                    }
+                }
+                if (!jsTarget || !fs.existsSync(jsTarget)) {
+                    continue;
+                }
+                const localNode = path.join(shimDir, 'node.exe');
+                const nodeCommand = fs.existsSync(localNode) ? localNode : 'node.exe';
+                return { command: nodeCommand, jsTarget, shimPath: candidate };
+            }
+            return null;
+        };
+        const shimResolution = resolveWindowsNpmShim(spawnCommand);
+        if (shimResolution) {
+            logger.info('Resolved Windows npm shim for shellless spawn', {
+                providerId: caps.id,
+                originalCommand: spawnCommand,
+                shimPath: shimResolution.shimPath,
+                nodeCommand: shimResolution.command,
+                jsTarget: shimResolution.jsTarget,
+            });
+            spawnCommand = shimResolution.command;
+            args.unshift(shimResolution.jsTarget);
+        }
         const needsShellSpawn = process.platform === 'win32' && (
             caps.id === 'auggie' ||
-            /\.(cmd|bat)$/i.test(spawnCommand)
+            (!shimResolution && /\.(cmd|bat)$/i.test(spawnCommand))
         );
         if (process.platform === 'win32' && needsShellSpawn) {
             spawnCommand = `"${spawnCommand}"`;
@@ -212,8 +289,10 @@ if (Test-Path $acpProvider) {
     $content = $content.Replace($oldStr, $newStr)
     Set-Content $acpProvider -Value $content -NoNewline
     Write-Host "  ✓ acp-provider shell=true patched for Windows"
-  } else {
+  } elseif ($content.Contains("resolveWindowsNpmShim")) {
     Write-Host "  - acp-provider already patched, skipping"
+  } else {
+    throw "acp-provider patch target not found; upstream spawn block changed"
   }
 }
 

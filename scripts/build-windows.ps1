@@ -245,22 +245,6 @@ updaterCacheDirName: intent-updater
   Write-Host "  ✓ app-update.yml patched for GitHub Releases"
 }
 
-# Patch 4: Check for other ESM/CJS issues
-$esmIssues = @(
-  @{ file = "node_modules/ssh-config/package.json"; addTypeModule = $true }
-)
-foreach ($issue in $esmIssues) {
-  $fp = Join-Path $ProjectRoot $issue.file
-  if ($issue.addTypeModule -and (Test-Path $fp)) {
-    $pkg2 = Get-Content $fp -Raw | ConvertFrom-Json
-    if (-not $pkg2.type) {
-      $pkg2 | Add-Member -Name "type" -Value "module" -MemberType NoteProperty -Force
-      $pkg2 | ConvertTo-Json -Depth 5 | Set-Content $fp -Encoding UTF8
-      Write-Host "  ✓ fixed $($issue.file)"
-    }
-  }
-}
-
 # ---- Step 7: Install dependencies ----
 if (-not $SkipInstall) {
   Write-Host "[7/8] Installing dependencies..." -ForegroundColor Yellow

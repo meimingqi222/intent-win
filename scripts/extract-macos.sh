@@ -27,8 +27,14 @@ cp "$RESOURCES/app-update.yml" "$OUTDIR/" 2>/dev/null || true
 cp "$RESOURCES/icon.icns" "$OUTDIR/" 2>/dev/null || true
 
 # Unpacked directory (native modules + renderer + resources)
+# Use tar to preserve all files including dotfiles
 if [ -d "$RESOURCES/app.asar.unpacked" ]; then
-  cp -R "$RESOURCES/app.asar.unpacked" "$OUTDIR/"
+  cd "$RESOURCES"
+  tar cf "$OUTDIR/app.asar.unpacked.tar" "app.asar.unpacked"
+  cd "$OUTDIR"
+  tar xf "app.asar.unpacked.tar"
+  rm "app.asar.unpacked.tar"
+  cd /
 fi
 
 hdiutil detach "$TMPMOUNT" -quiet

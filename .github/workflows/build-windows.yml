@@ -100,10 +100,6 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install global tools
-        run: |
-          npm install -g @electron/asar
-
       - name: Build Windows installer
         shell: pwsh
         run: |

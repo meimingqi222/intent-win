@@ -18,17 +18,13 @@ Write-Host ""
 
 # ---- Step 1: Extract app.asar ----
 Write-Host "[1/8] Extracting app.asar..." -ForegroundColor Yellow
-$asarExe = "$PSScriptRoot\..\node_modules\.bin\asar"
-if (-not (Test-Path $asarExe)) {
-  npm install -g @electron/asar
-  $asarExe = "asar"
-}
-
 if (Test-Path $ProjectRoot) {
   Remove-Item $ProjectRoot -Recurse -Force
 }
 mkdir $ProjectRoot -Force | Out-Null
-asar extract "$ResourcesDir\app.asar" "$ProjectRoot\app_content"
+
+# Use Node.js script for robust extraction (handles missing unpacked dotfiles gracefully)
+node "$PSScriptRoot\extract-asar.js" "$ResourcesDir\app.asar" "$ProjectRoot\app_content"
 
 # ---- Step 2: Merge unpacked files ----
 Write-Host "[2/8] Merging unpacked files..." -ForegroundColor Yellow
@@ -39,9 +35,10 @@ if (Test-Path $unpacked) {
 
 # ---- Step 3: Set up project structure ----
 Write-Host "[3/8] Setting up project structure..." -ForegroundColor Yellow
-# Move extracted content to root
-Get-ChildItem "$ProjectRoot\app_content" | Move-Item -Destination $ProjectRoot -Force
-Remove-Item "$ProjectRoot\app_content" -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path "$ProjectRoot\app_content") {
+  Get-ChildItem "$ProjectRoot\app_content" | Move-Item -Destination $ProjectRoot -Force
+  Remove-Item "$ProjectRoot\app_content" -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # ---- Step 4: Copy resources ----
 Write-Host "[4/8] Copying resources..." -ForegroundColor Yellow
@@ -271,18 +268,20 @@ if (-not $SkipInstall) {
   }
   Write-Host "  ✓ native modules rebuilt"
 
-  Set-Location $ProjectRoot\..
+  $BuildRoot = (Resolve-Path "$ProjectRoot\..").Path
   Write-Host "  ✓ dependencies installed"
 } else {
   Write-Host "[7/8] Skipping dependency install (--SkipInstall)" -ForegroundColor Yellow
+  $BuildRoot = (Resolve-Path "$ProjectRoot\..").Path
 }
 
 # ---- Step 8: Build Windows installer ----
 Write-Host "[8/8] Building Windows installer..." -ForegroundColor Yellow
-Set-Location $ProjectRoot
+Push-Location $ProjectRoot
 npm run build:win 2>&1
-Set-Location $ProjectRoot\..
+Pop-Location
 
+$InstallerDir = Join-Path $BuildRoot "installer"
 Write-Host ""
 Write-Host "=== Build complete! ===" -ForegroundColor Green
-Write-Host "Installer: $ProjectRoot\..\installer\Intent-Setup-$Version-win-x64.exe"
+Write-Host "Installer: $(Join-Path $InstallerDir "Intent-Setup-$Version-win-x64.exe")"

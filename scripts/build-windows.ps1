@@ -83,6 +83,9 @@ $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
 # Remove pnpm config
 $pkg.PSObject.Properties.Remove('pnpm')
 
+# Ensure top-level productName is set (Electron reads this for app.getName())
+$pkg | Add-Member -Name "productName" -Value "Intent" -MemberType NoteProperty -Force
+
 # Add build config
 $buildConfig = @{
   appId = "com.augmentcode.intent"
@@ -91,7 +94,7 @@ $buildConfig = @{
   files = @("dist/**/*", "resources/**/*", "package.json")
   win = @{
     target = @(@{ target = "nsis"; arch = @("x64") })
-    icon = "resources\icon.png"
+    icon = "resources\icon.ico"
     sign = $false
     signAndEditExecutable = $false
     verifyUpdateCodeSignature = $false
@@ -195,6 +198,9 @@ if (-not $SkipInstall) {
   # Install electron and electron-builder
   npm install --save-dev electron@34.0.0 electron-builder@25.1.8 2>&1 | Out-Null
 
+  # Install png-to-ico for generating Windows .ico from PNG
+  npm install --save-dev png-to-ico@3.0.1 2>&1 | Out-Null
+
   # Install Windows-specific native packages
   npm install @img/sharp-win32-x64 @parcel/watcher-win32-x64 2>&1 | Out-Null
 
@@ -223,20 +229,28 @@ if (-not $SkipInstall) {
   $BuildRoot = Split-Path $ProjectRoot -Parent
 }
 
-# ---- Step 7.5: Generate icon (sharp is now available) ----
-$iconPng = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
-$iconOut = "$ProjectRoot\resources\icon.png"
-if (Test-Path $iconPng) {
+# ---- Step 7.5: Generate Windows .ico icon ----
+$iconSource = "$ProjectRoot\dist\renderer\icons\Icon-iOS-Default-68x68@2x.png"
+$iconPng = "$ProjectRoot\resources\icon.png"
+$iconIco = "$ProjectRoot\resources\icon.ico"
+
+if (Test-Path $iconSource) {
   Push-Location $ProjectRoot
-  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "dist\renderer\icons\Icon-iOS-Default-68x68@2x.png" "resources\icon.png" 2>&1
+  # First generate a 256x256 PNG using sharp
+  node -e "const s=require('sharp');s(process.argv[1]).resize(256,256,{kernel:'lanczos3'}).png().toFile(process.argv[2])" "$iconSource" "$iconPng" 2>&1 | Out-Null
+  
+  # Then convert PNG to multi-size ICO using png-to-ico
+  node -e "const {default: p}=require('png-to-ico');p(process.argv[1]).then(b=>require('fs').writeFileSync(process.argv[2],b))" "$iconPng" "$iconIco" 2>&1 | Out-Null
   Pop-Location
-  if (Test-Path $iconOut) {
-    Write-Host "  ✓ icon.png generated (256x256, $(Get-Item $iconOut).Length bytes)"
+  
+  if (Test-Path $iconIco) {
+    $icoSize = (Get-Item $iconIco).Length
+    Write-Host "  ✓ icon.ico generated ($icoSize bytes)"
   } else {
-    Write-Host "  ! icon generation failed, using default" -ForegroundColor Yellow
+    Write-Host "  ! icon.ico generation failed, falling back to png" -ForegroundColor Yellow
   }
 } else {
-  Write-Host "  ! no icon source found at $iconPng" -ForegroundColor Yellow
+  Write-Host "  ! no icon source found at $iconSource" -ForegroundColor Yellow
 }
 
 # ---- Step 8: Build Windows installer ----

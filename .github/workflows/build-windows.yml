@@ -74,6 +74,7 @@ jobs:
           name: macos-resources
           path: /tmp/intent-resources/
           retention-days: 3
+          include-hidden-files: true
 
   # ──────────────────────────────────────────────
   #  JOB 2 — Windows: build installer

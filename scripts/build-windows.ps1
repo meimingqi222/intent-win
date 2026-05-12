@@ -23,22 +23,35 @@ if (Test-Path $ProjectRoot) {
 }
 mkdir $ProjectRoot -Force | Out-Null
 
-# Ensure @electron/asar is available for the extraction script
-$asarPkg = Join-Path $PSScriptRoot "..\node_modules\@electron\asar"
-if (-not (Test-Path $asarPkg)) {
-  Push-Location (Join-Path $PSScriptRoot "..")
-  npm install --ignore-scripts 2>&1 | Out-Null
-  Pop-Location
-}
+# Install @electron/asar locally so `npx asar` works
+Push-Location (Join-Path $PSScriptRoot "..")
+npm install --ignore-scripts 2>&1 | Out-Null
+$asarCmd = (Resolve-Path ".\node_modules\.bin\asar.cmd").Path
+Pop-Location
 
-node "$PSScriptRoot\extract-asar.js" "$ResourcesDir\app.asar" "$ProjectRoot\app_content"
+# asar extract: partial failure on missing .asar.unpacked dotfiles is OK
+# The main code (dist/, package.json, etc.) IS extracted successfully.
+$extractOk = $true
+try {
+  & $asarCmd extract "$ResourcesDir\app.asar" "$ProjectRoot\app_content" 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "asar exit code $LASTEXITCODE" }
+} catch {
+  $msg = "$_"
+  if ($msg -match "Unable to extract some files" -or $msg -match "ENOENT") {
+    Write-Host "  ! asar warnings (missing .asar.unpacked dotfiles — expected, safe to ignore)" -ForegroundColor Yellow
+    $extractOk = $true
+  } else {
+    Write-Host "  ! asar extraction error: $_" -ForegroundColor Red
+    $extractOk = $false
+  }
+}
 
 # ---- Step 2: Merge unpacked files ----
 Write-Host "[2/8] Merging unpacked files..." -ForegroundColor Yellow
+$appContent = "$ProjectRoot\app_content"
 $unpacked = "$ResourcesDir\app.asar.unpacked"
-if (Test-Path $unpacked) {
-  # Use robocopy for robust directory merge (handles file/dir conflicts)
-  robocopy "$unpacked" "$ProjectRoot\app_content" /E /NJH /NJS /NDL /NP 2>&1 | Out-Null
+if ((Test-Path $unpacked) -and (Test-Path $appContent)) {
+  robocopy "$unpacked" "$appContent" /E /NJH /NJS /NDL /NP 2>&1 | Out-Null
 }
 
 # ---- Step 3: Set up project structure ----

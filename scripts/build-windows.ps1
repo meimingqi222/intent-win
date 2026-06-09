@@ -428,6 +428,97 @@ if (-not $SkipInstall) {
   $BuildRoot = Split-Path $ProjectRoot -Parent
 }
 
+# ---- Step 7.6: Guarantee @parcel/watcher-win32-x64 native binary ----
+# The upstream Intent app.asar is a macOS (arm64) build: @parcel/watcher ships
+# its native binary as a NESTED node_modules/@parcel/watcher-darwin-arm64 and
+# carries no local ./build/Release/watcher.node. On Windows, watcher/index.js
+# runs require('@parcel/watcher-win32-x64'); npm's optional-dependency
+# resolution against the macOS-originated tree does not reliably materialize
+# that package into the packaged output, so the app throws
+#   "No prebuild or local build of @parcel/watcher found. Tried @parcel/watcher-win32-x64."
+# Fetch the win32-x64 binary at the EXACT watcher version and place it in both
+# the nested location (Node resolves it first; covered by the existing
+# `node_modules/@parcel/watcher/**` asarUnpack glob — proven, since the darwin
+# binary survives there in shipped builds) and the top-level location (declared
+# dep; covered by its own asarUnpack glob). Then drop the stale non-win32
+# prebuilt binaries baked into the macOS asar.
+Write-Host "[7.6/8] Ensuring @parcel/watcher-win32-x64 native binary..." -ForegroundColor Yellow
+$watcherDir = Join-Path $ProjectRoot "node_modules\@parcel\watcher"
+if (Test-Path $watcherDir) {
+  $watcherVersion = (Get-Content (Join-Path $watcherDir "package.json") -Raw | ConvertFrom-Json).version
+  $nestedParcel = Join-Path $watcherDir "node_modules\@parcel"
+  $nestedWin32  = Join-Path $nestedParcel "watcher-win32-x64"
+  $topWin32     = Join-Path $ProjectRoot "node_modules\@parcel\watcher-win32-x64"
+
+  # Stage a clean copy of the package in TEMP so the source never collides with
+  # the destinations below. Prefer an existing install; else fetch from npm at
+  # the exact watcher version.
+  $stage    = Join-Path $env:TEMP ("pw32-" + [System.Guid]::NewGuid().ToString("N"))
+  $stagePkg = Join-Path $stage "package"
+  mkdir $stage -Force | Out-Null
+  try {
+    $existing = $null
+    if (Test-Path (Join-Path $topWin32 "watcher.node"))        { $existing = $topWin32 }
+    elseif (Test-Path (Join-Path $nestedWin32 "watcher.node")) { $existing = $nestedWin32 }
+
+    if ($existing) {
+      Write-Host "  - reusing existing @parcel/watcher-win32-x64 from $existing"
+      Copy-Item $existing $stagePkg -Recurse -Force
+    } else {
+      Write-Host "  - fetching @parcel/watcher-win32-x64@$watcherVersion from npm"
+      Push-Location $stage
+      try {
+        npm pack "@parcel/watcher-win32-x64@$watcherVersion" 2>&1 | Write-Host
+        if ($LASTEXITCODE -ne 0) { throw "npm pack failed for @parcel/watcher-win32-x64@$watcherVersion (exit $LASTEXITCODE)" }
+        $tgz = Get-ChildItem -Filter "*.tgz" | Select-Object -First 1
+        if (-not $tgz) { throw "npm pack produced no tarball for @parcel/watcher-win32-x64@$watcherVersion" }
+        tar -xzf $tgz.FullName
+        Remove-Item $tgz.FullName -Force
+      } finally {
+        Pop-Location
+      }
+    }
+    if (-not (Test-Path (Join-Path $stagePkg "watcher.node"))) {
+      throw "staged @parcel/watcher-win32-x64 is missing watcher.node"
+    }
+
+    # Place into both nested (Node resolves first) and top-level locations.
+    foreach ($dest in @($nestedWin32, $topWin32)) {
+      if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+      $destParent = Split-Path $dest -Parent
+      if (-not (Test-Path $destParent)) { mkdir $destParent -Force | Out-Null }
+      Copy-Item $stagePkg $dest -Recurse -Force
+    }
+  } finally {
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  if (-not (Test-Path (Join-Path $nestedWin32 "watcher.node"))) {
+    throw "@parcel/watcher-win32-x64 native binary missing at $nestedWin32 after placement"
+  }
+  $win32KB = [math]::Round((Get-Item (Join-Path $nestedWin32 "watcher.node")).Length / 1KB)
+  Write-Host "  ✓ @parcel/watcher-win32-x64 placed nested + top-level ($win32KB KB)"
+
+  # Drop stale non-win32 prebuilt binaries baked into the macOS asar — useless on Windows.
+  Get-ChildItem $nestedParcel -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "watcher-*" -and $_.Name -ne "watcher-win32-x64" } |
+    ForEach-Object {
+      Remove-Item $_.FullName -Recurse -Force
+      Write-Host "  - removed stale $($_.Name)"
+    }
+
+  # Re-affirm it as a declared dependency so electron-builder doesn't prune it.
+  $mainPkgPath = Join-Path $ProjectRoot "package.json"
+  $mainPkg = Get-Content $mainPkgPath -Raw | ConvertFrom-Json
+  if (-not $mainPkg.PSObject.Properties['dependencies']) {
+    $mainPkg | Add-Member -Name "dependencies" -Value ([PSCustomObject]@{}) -MemberType NoteProperty
+  }
+  $mainPkg.dependencies | Add-Member -Name "@parcel/watcher-win32-x64" -Value $watcherVersion -MemberType NoteProperty -Force
+  $mainPkg | ConvertTo-Json -Depth 10 | Set-Content $mainPkgPath -Encoding UTF8
+} else {
+  Write-Host "  ! @parcel/watcher not found at $watcherDir — skipping watcher fix" -ForegroundColor Yellow
+}
+
 # ---- Step 7.5: Copy pre-built Windows .ico icon ----
 $iconRepo = Join-Path (Split-Path $PSScriptRoot -Parent) "assets\icon.ico"
 $iconDest = "$ProjectRoot\resources\icon.ico"
@@ -461,6 +552,21 @@ $MainExe = Join-Path $InstallerDir "win-unpacked\Intent.exe"
 if (-not (Test-Path $MainExe)) {
   throw "Built main executable was not found at $MainExe"
 }
+
+# Verify the @parcel/watcher native binary survived packaging + asar unpacking.
+# This is the exact dependency whose absence crashed earlier builds at launch
+# ("No prebuild or local build of @parcel/watcher found"), so fail the build
+# here rather than shipping a broken installer.
+$winUnpacked = Join-Path $InstallerDir "win-unpacked"
+$watcherNodeCandidates = @(
+  (Join-Path $winUnpacked "resources\app.asar.unpacked\node_modules\@parcel\watcher\node_modules\@parcel\watcher-win32-x64\watcher.node"),
+  (Join-Path $winUnpacked "resources\app.asar.unpacked\node_modules\@parcel\watcher-win32-x64\watcher.node")
+)
+$watcherNodeFound = $watcherNodeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $watcherNodeFound) {
+  throw "@parcel/watcher-win32-x64\watcher.node not found in packaged output; the app would crash on launch. Checked:`n  $($watcherNodeCandidates -join "`n  ")"
+}
+Write-Host "  ✓ @parcel/watcher native binary present in packaged app" -ForegroundColor Green
 
 $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($MainExe)
 if ($versionInfo.ProductName -eq "Electron" -or $versionInfo.OriginalFilename -eq "electron.exe") {

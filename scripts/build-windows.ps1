@@ -137,6 +137,7 @@ $buildConfig = @{
     "node_modules/node-pty/**",
     "node_modules/cpu-features/**",
     "node_modules/@parcel/watcher/**",
+    "node_modules/@parcel/watcher-win32-x64/**",
     "node_modules/sharp/**",
     "node_modules/ssh2/**",
     "resources/bin/**"

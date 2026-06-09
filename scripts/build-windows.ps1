@@ -371,6 +371,23 @@ if (-not $SkipInstall) {
   if (Test-Path $srtBackupDir) {
     Move-Item $srtBackupDir $srtRestoreDir -Force
     Write-Host "  ✓ svelte-redux-toolkit restored after npm install"
+
+    # Re-add to package.json dependencies so electron-builder includes it in
+    # the asar. Without this entry, electron-builder prunes it as extraneous
+    # since the original "file:" dep was stripped.
+    $srtPkgJsonPath = Join-Path $srtRestoreDir "package.json"
+    if (Test-Path $srtPkgJsonPath) {
+      $srtPkg = Get-Content $srtPkgJsonPath -Raw | ConvertFrom-Json
+      $srtVersion = $srtPkg.version
+      $mainPkgPath = Join-Path $ProjectRoot "package.json"
+      $mainPkg = Get-Content $mainPkgPath -Raw | ConvertFrom-Json
+      if (-not $mainPkg.PSObject.Properties['dependencies']) {
+        $mainPkg | Add-Member -Name "dependencies" -Value ([PSCustomObject]@{}) -MemberType NoteProperty
+      }
+      $mainPkg.dependencies | Add-Member -Name "svelte-redux-toolkit" -Value "^$srtVersion" -MemberType NoteProperty -Force
+      $mainPkg | ConvertTo-Json -Depth 10 | Set-Content $mainPkgPath -Encoding UTF8
+      Write-Host "  ✓ svelte-redux-toolkit added to package.json dependencies (v$srtVersion)"
+    }
   }
 
   # Install electron and electron-builder

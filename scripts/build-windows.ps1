@@ -338,17 +338,23 @@ updaterCacheDirName: intent-updater
 if (-not $SkipInstall) {
   Write-Host "[7/8] Installing dependencies..." -ForegroundColor Yellow
   Set-Location $ProjectRoot
-  npm install --ignore-scripts 2>&1 | Out-Null
+  npm install --ignore-scripts 2>&1 | Write-Host
 
   # Install electron and electron-builder
-  npm install --save-dev electron@34.0.0 electron-builder@25.1.8 2>&1 | Out-Null
+  npm install --save-dev electron@34.0.0 electron-builder@25.1.8 2>&1 | Write-Host
+
+  # Verify electron-builder is available
+  $ebCmd = Join-Path $ProjectRoot "node_modules\.bin\electron-builder.cmd"
+  if (-not (Test-Path $ebCmd)) {
+    throw "electron-builder not found at $ebCmd — npm install may have failed"
+  }
 
   # Install Windows-specific native packages
-  npm install @img/sharp-win32-x64 @parcel/watcher-win32-x64 2>&1 | Out-Null
+  npm install @img/sharp-win32-x64 @parcel/watcher-win32-x64 2>&1 | Write-Host
 
   # Rebuild native modules for Electron
   # node-pty may fail on some VS configs (Spectre), patch vcxproj and retry
-  npm rebuild better-sqlite3 cpu-features 2>&1 | Out-Null
+  npm rebuild better-sqlite3 cpu-features 2>&1 | Write-Host
   $nodePtyDir = Join-Path $ProjectRoot "node_modules\node-pty"
   if (Test-Path $nodePtyDir) {
     $result = npm rebuild node-pty 2>&1
@@ -359,7 +365,7 @@ if (-not $SkipInstall) {
         $c = $c -replace '<SpectreMitigation>[^<]*</SpectreMitigation>', ''
         Set-Content $_.FullName -Value $c -NoNewline
       }
-      npm rebuild node-pty 2>&1 | Out-Null
+      npm rebuild node-pty 2>&1 | Write-Host
     }
   }
   Write-Host "  ✓ native modules rebuilt"

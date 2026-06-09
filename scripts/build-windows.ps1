@@ -83,7 +83,16 @@ $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
 # Remove pnpm config
 $pkg.PSObject.Properties.Remove('pnpm')
 
-# Remove file: protocol dependencies (tgz files not available after asar extraction)
+# Remove file: protocol dependencies (tgz files not available after asar extraction).
+# Save svelte-redux-toolkit before npm install removes it — it's a runtime ESM
+# dependency used by 86+ files in 0.4.0+.
+$srtBackupDir = Join-Path $ProjectRoot "__srt_backup__"
+$srtDir = Join-Path $ProjectRoot "node_modules\svelte-redux-toolkit"
+if (Test-Path $srtDir) {
+  Move-Item $srtDir $srtBackupDir -Force
+  Write-Host "  - backed up svelte-redux-toolkit before npm install"
+}
+
 $depsToRemove = @()
 if ($pkg.PSObject.Properties['dependencies']) {
   foreach ($prop in $pkg.PSObject.Properties['dependencies'].Value.PSObject.Properties) {
@@ -105,7 +114,7 @@ $buildConfig = @{
   appId = "com.augmentcode.intent"
   productName = "Intent"
   directories = @{ output = "..\installer" }
-  files = @("dist/**/*", "resources/**/*", "package.json")
+  files = @("dist/**/*", "resources/**/*", "package.json", "node_modules/**/*")
   win = @{
     target = @(@{ target = "nsis"; arch = @("x64") })
     icon = "resources\icon.ico"
@@ -353,6 +362,16 @@ if (-not $SkipInstall) {
   Write-Host "[7/8] Installing dependencies..." -ForegroundColor Yellow
   Set-Location $ProjectRoot
   npm install --ignore-scripts 2>&1 | Write-Host
+
+  # Restore svelte-redux-toolkit that was backed up before npm install.
+  # npm install removes packages not in package.json, but svelte-redux-toolkit
+  # is a runtime ESM import (createAction, createReducer, etc.) used by 86+ files.
+  $srtBackupDir = Join-Path $ProjectRoot "__srt_backup__"
+  $srtRestoreDir = Join-Path $ProjectRoot "node_modules\svelte-redux-toolkit"
+  if (Test-Path $srtBackupDir) {
+    Move-Item $srtBackupDir $srtRestoreDir -Force
+    Write-Host "  ✓ svelte-redux-toolkit restored after npm install"
+  }
 
   # Install electron and electron-builder
   npm install --save-dev electron@34.0.0 electron-builder@25.1.8 2>&1 | Write-Host

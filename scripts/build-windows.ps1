@@ -83,6 +83,20 @@ $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
 # Remove pnpm config
 $pkg.PSObject.Properties.Remove('pnpm')
 
+# Remove file: protocol dependencies (tgz files not available after asar extraction)
+$depsToRemove = @()
+if ($pkg.PSObject.Properties['dependencies']) {
+  foreach ($prop in $pkg.PSObject.Properties['dependencies'].Value.PSObject.Properties) {
+    if ($prop.Value -match '^file:') {
+      $depsToRemove += $prop.Name
+    }
+  }
+  foreach ($name in $depsToRemove) {
+    $pkg.dependencies.PSObject.Properties.Remove($name)
+    Write-Host "  - removed local dependency: $name"
+  }
+}
+
 # Ensure top-level productName is set (Electron reads this for app.getName())
 $pkg | Add-Member -Name "productName" -Value "Intent" -MemberType NoteProperty -Force
 

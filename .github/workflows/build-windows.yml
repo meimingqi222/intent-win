@@ -38,6 +38,7 @@ jobs:
     runs-on: macos-14  # Apple Silicon runner
     outputs:
       version: ${{ steps.detect-version.outputs.version }}
+      release_exists: ${{ steps.check-release.outputs.exists }}
     steps:
       - name: Checkout repo (for scripts)
         uses: actions/checkout@v4
@@ -61,7 +62,22 @@ jobs:
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "Detected version: ${VER}"
 
+      - name: Check if release already exists
+        id: check-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${{ steps.detect-version.outputs.version }}"
+          if [ "$VER" != "unknown" ] && gh release view "v${VER}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${VER} already exists — will skip build & publish"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release v${VER} does not exist — will build"
+          fi
+
       - name: Upload extracted Resources
+        if: steps.check-release.outputs.exists != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: macos-resources
@@ -74,7 +90,7 @@ jobs:
   # ──────────────────────────────────────────────
   build-windows:
     needs: extract-macos
-    if: always() && !cancelled()
+    if: always() && !cancelled() && needs.extract-macos.outputs.release_exists != 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout repo (for patches + scripts)
@@ -126,7 +142,7 @@ jobs:
   # ──────────────────────────────────────────────
   publish:
     needs: [extract-macos, build-windows]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && needs.extract-macos.outputs.release_exists != 'true' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
